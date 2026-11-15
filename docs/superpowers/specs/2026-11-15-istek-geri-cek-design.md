@@ -146,6 +146,18 @@ hemen önce yapılarak en aza indirilir. Sonraki kontrol "takip ediliyordu" duru
 `.exe` ile birlikte tek sayfalık, resimli ve Türkçe bir "Nasıl kullanılır" belgesi.
 Windows'un "Bilgisayarınız korundu" uyarısında "Ek bilgi → Yine de çalıştır" adımı ekran görüntüsüyle anlatılır.
 
+## Test ve güvenli ilk çalıştırma (kullanıcıyla kararlaştırıldı)
+
+- **Deneme hesaplarıyla test:** Kullanıcı iki deneme hesabı açacak. Hesap A istek gönderir, Hesap B gizli hesaptır
+  ve isteklerden birini kabul eder. Program arkadaşa verilmeden önce bu hesaplarla adım adım denenir.
+  Hata çıkarsa kullanıcı rapor dosyasını iletir, düzeltilmiş sürüm çıkarılır.
+- **Güvenli ilk çalıştırma (her zaman var):** Bir hesapta ilk çalıştırmada program önce hiçbir şeyi
+  değiştirmeden yalnızca kontrol eder ("128 bekleyen, 5 kabul edilmiş, 3 hesap yok"). Sonra tek bir isteği geri çeker
+  ve tuttuğunu doğrular. Ancak ondan sonra tümüne geçer. Kullanıcıya bu tek bir "Başlat" gibi görünür,
+  ara adımlar ilerleme ekranında yazıyla gösterilir.
+- **Raporlama:** Bitiş ve hata ekranlarında "Raporu kaydet" butonu, Masaüstüne tek bir metin dosyası yazar
+  (şifre ya da çerez içermez). Pencerede sürüm numarası görünür.
+
 ## Geliştiriciye bırakılanlar
 
 - Modül yapısı, dosya adları ve test çatısı.
