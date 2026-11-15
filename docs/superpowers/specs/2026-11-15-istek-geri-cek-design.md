@@ -106,9 +106,9 @@ Bu kontrol aynı zamanda gerçek hesap olmadan doğrulamanın yolu: program her 
 
 *(Benim kararım)* Instagram'da istek geri çekme büyük olasılıkla takipten çıkmayla aynı çağrı. Kontrol ile çağrı arasında
 istek kabul edilirse (saniyeler içinde, çok düşük olasılık) kişi takipten çıkmış olur. Bu pencere, kontrol çağrıdan
-hemen önce yapılarak en aza indirilir. Sonraki kontrol "takip ediliyordu" durumunu görürse otomatik yeniden takip
-**yapılmaz** (gizli hesapta yeni istek gönderirdi). Bunun yerine bitiş özetinde ayrı ve açık bir satırda listelenir:
-"Bu kişiler tam o sırada isteğini kabul etmişti, tekrar takip etmek isteyebilirsin."
+hemen önce yapılarak en aza indirilir. Bu durum sonradan güvenilir şekilde ayırt edilemez (her iki durumda da
+sonuç "takip yok"), bu yüzden ayrı bir kategori yok. Geri çekme sonrası kişi hâlâ takip ediliyor görünürse sonuç
+"başarısız" olur ve otomatik yeniden deneme veya yeniden takip yapılmaz.
 
 ### Hız ve engellenme
 
