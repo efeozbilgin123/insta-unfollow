@@ -1,0 +1,58 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: pytest -v
+
+  build:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install . pyinstaller
+      - name: Build exe
+        run: pyinstaller --onefile --noconsole --name IstekGeriCek --paths src --collect-all playwright src/istek_geri_cek/__main__.py
+      - name: Smoke test (Edge + bundled Playwright driver)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\IstekGeriCek.exe -ArgumentList "--smoke-test","smoke.txt" -Wait -PassThru
+          Get-Content smoke.txt
+          if (-not ((Get-Content smoke.txt -Raw) -match '^OK ')) { exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IstekGeriCek
+          path: dist/IstekGeriCek.exe
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: IstekGeriCek
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            IstekGeriCek.exe
+            docs/KULLANIM.md
