@@ -62,6 +62,10 @@ class NetworkError(Exception):
     pass
 
 
+class UnexpectedResponse(Exception):
+    """Yanıt beklenen biçimde değil: hiçbir şey kaydedilmez, iş durur."""
+
+
 class ApiError(Exception):
     """Tek bir kullanıcıya özgü hata (4xx): o kişi 'başarısız' sayılır, iş devam eder."""
 
@@ -79,11 +83,12 @@ def classify_response(status: int, body: dict | None) -> None:
 
 
 def status_from_friendship(fs: dict) -> Status:
-    if fs.get("outgoing_request"):
-        return Status.PENDING
-    if fs.get("following"):
+    out, fol = (fs or {}).get("outgoing_request"), (fs or {}).get("following")
+    if not isinstance(out, bool) or not isinstance(fol, bool):
+        raise UnexpectedResponse(f"friendship: {fs!r}"[:300])
+    if fol:  # kabul edilmiş takip her zaman önceliklidir: asla geri çekme
         return Status.FOLLOWING
-    return Status.NONE
+    return Status.PENDING if out else Status.NONE
 
 
 class InstagramClient:
@@ -106,14 +111,16 @@ class InstagramClient:
 
     def lookup(self, username: str) -> tuple[Status, str | None]:
         status, data = self._call(PROFILE_URL.format(username=quote(username)))
-        user = ((data or {}).get("data") or {}).get("user")
-        if status == 404 or not user or not user.get("id"):
+        if status == 404:
             return Status.NOT_FOUND, None
+        user = ((data if isinstance(data, dict) else {}).get("data") or {}).get("user")
+        if not isinstance(user, dict) or not user.get("id"):
+            raise UnexpectedResponse(f"profile {status}: {data!r}"[:300])
         uid = str(user["id"])
         status, fs = self._call(FRIENDSHIP_URL.format(user_id=uid))
         if status == 404:
             return Status.NOT_FOUND, None
-        return status_from_friendship(fs or {}), uid
+        return status_from_friendship(fs if isinstance(fs, dict) else {}), uid
 
     def cancel(self, user_id: str) -> None:
         self._call(CANCEL_URL.format(user_id=user_id), method="POST", body=f"user_id={user_id}")

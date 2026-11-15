@@ -46,16 +46,10 @@ def test_classify_ok():
 def test_status_from_friendship():
     assert status_from_friendship({"outgoing_request": True, "following": False}) is Status.PENDING
     assert status_from_friendship({"outgoing_request": False, "following": True}) is Status.FOLLOWING
-    assert status_from_friendship({}) is Status.NONE
 
 
 def test_lookup_not_found():
     assert InstagramClient(FakePage()).lookup("yok") == (Status.NOT_FOUND, None)
-
-
-def test_lookup_null_user_is_not_found():
-    page = FakePage({"web_profile_info": {"status": 200, "body": {"data": {"user": None}}}})
-    assert InstagramClient(page).lookup("yok") == (Status.NOT_FOUND, None)
 
 
 def test_lookup_pending():
@@ -88,3 +82,32 @@ def test_current_username_logged_in():
     page = FakePage({"users/7/info": {"status": 200, "body": {"user": {"username": "Efe"}}}},
                     cookies={"ds_user_id": "7"})
     assert InstagramClient(page).current_username() == "efe"
+
+
+# ---- final review fixes ----------------------------------------------------
+from istek_geri_cek.instagram_api import UnexpectedResponse
+
+
+def test_profile_200_with_garbage_body_is_unexpected():
+    page = FakePage({"web_profile_info": {"status": 200, "body": None}})
+    with pytest.raises(UnexpectedResponse):
+        InstagramClient(page).lookup("ali")
+
+
+def test_profile_200_without_user_id_is_unexpected():
+    page = FakePage({"web_profile_info": {"status": 200, "body": {"data": {"user": None}}}})
+    with pytest.raises(UnexpectedResponse):
+        InstagramClient(page).lookup("ali")
+
+
+def test_friendship_without_booleans_is_unexpected():
+    with pytest.raises(UnexpectedResponse):
+        status_from_friendship({"status": "ok"})
+
+
+def test_following_wins_over_outgoing_request():
+    assert status_from_friendship({"outgoing_request": True, "following": True}) is Status.FOLLOWING
+
+
+def test_friendship_none_requires_both_false():
+    assert status_from_friendship({"outgoing_request": False, "following": False}) is Status.NONE

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from . import config
-from .instagram_api import ApiError, LoginRequired, NetworkError, RateLimited, Status
+from .instagram_api import ApiError, LoginRequired, NetworkError, RateLimited, Status, UnexpectedResponse
 from .store import Outcome, Progress, Store
 
 _NON_PENDING = {
@@ -23,7 +23,7 @@ class Event:
     total: int = 0
     username: str | None = None
     seconds: float | None = None
-    reason: str | None = None  # rate_limited | login | network | user | trial_failed
+    reason: str | None = None  # rate_limited | login | network | user | trial_failed | unexpected
 
 
 @dataclass
@@ -32,6 +32,7 @@ class CheckSummary:
     accepted: int
     no_request: int
     not_found: int
+    failed: int = 0
 
 
 class _Stop(Exception):
@@ -45,6 +46,7 @@ class Runner:
                  rand: Callable[[float, float], float], stop: threading.Event):
         self.client, self.store, self.p = client, store, progress
         self.emit, self._sleep, self.now, self.rand, self.stop = emit, sleep, now, rand, stop
+        self._api_error_streak: list[str] = []
 
     # ---- yardımcılar -------------------------------------------------------
     def _event(self, kind: str, **kw) -> Event:
@@ -67,11 +69,27 @@ class Runner:
             except NetworkError:
                 if attempt == len(backoff):
                     raise
-                self._sleep(backoff[attempt])
+                self.emit(self._event("waiting", seconds=backoff[attempt]))
+                self._wait(backoff[attempt])
 
     def _record(self, u: str, outcome: Outcome) -> None:
         self.p.results[u] = outcome
         self.store.save(self.p)
+
+    def _lookup(self, u: str):
+        """Taze durum sorgusu. Tek kişilik 4xx → FAILED; art arda 3 tane → sistemik, durdur."""
+        try:
+            result = self._retry(lambda: self.client.lookup(u))
+        except ApiError:
+            self._record(u, Outcome.FAILED)
+            self._api_error_streak.append(u)
+            if len(self._api_error_streak) >= 3:
+                for name in self._api_error_streak:
+                    self.p.results.pop(name, None)
+                raise UnexpectedResponse("art arda 3 ApiError")
+            return None
+        self._api_error_streak.clear()
+        return result
 
     def _guarded(self, body) -> bool:
         """body() çalıştırır; durdurma sebeplerini olaya çevirir. Tamamlandıysa True."""
@@ -84,6 +102,8 @@ class Runner:
             reason = "login"
         except NetworkError:
             reason = "network"
+        except UnexpectedResponse:
+            reason = "unexpected"
         except _Stop as s:
             reason = s.reason
         self.store.save(self.p)
@@ -98,11 +118,10 @@ class Runner:
                 if self.stop.is_set():
                     raise _Stop("user")
                 self.emit(Event("checking", done=i, total=len(todo), username=u))
-                try:
-                    status, _ = self._retry(lambda: self.client.lookup(u))
-                except ApiError:
-                    self._record(u, Outcome.FAILED)
+                found = self._lookup(u)
+                if found is None:
                     continue
+                status, _ = found
                 self.p.checked[u] = status.name
                 if status in _NON_PENDING:
                     self.p.results[u] = _NON_PENDING[status]
@@ -121,7 +140,8 @@ class Runner:
         vals = list(r.values())
         pending = sum(1 for u, st in self.p.checked.items() if st == Status.PENDING.name and u not in r)
         return CheckSummary(pending=pending, accepted=vals.count(Outcome.ACCEPTED),
-                            no_request=vals.count(Outcome.NO_REQUEST), not_found=vals.count(Outcome.NOT_FOUND))
+                            no_request=vals.count(Outcome.NO_REQUEST), not_found=vals.count(Outcome.NOT_FOUND),
+                            failed=vals.count(Outcome.FAILED))
 
     # ---- geri çekme --------------------------------------------------------
     def _respect_hourly_cap(self) -> None:
@@ -133,30 +153,47 @@ class Runner:
             self._wait(wait)
 
     def _process(self, u: str) -> tuple[Outcome, bool]:
-        """Bir kişiyi işler. (sonuç, geri çekme çağrısı yapıldı mı) döner."""
-        try:
-            status, uid = self._retry(lambda: self.client.lookup(u))
-        except ApiError:
-            self._record(u, Outcome.FAILED)
-            return Outcome.FAILED, False
-        if status is not Status.PENDING:
-            self._record(u, _NON_PENDING[status])
-            return _NON_PENDING[status], False
-        self._respect_hourly_cap()
-        # Taze kontrol PENDING dedi: hemen geri çek. Buradan sonra yeniden kontrol bitene
-        # kadar durdurma isteğine bakılmaz.
-        try:
-            self._retry(lambda: self.client.cancel(uid))
-        except ApiError:
-            self._record(u, Outcome.FAILED)
-            return Outcome.FAILED, True
+        """Bir kişiyi işler. (sonuç, geri çekme çağrısı yapıldı mı) döner.
+
+        Kural: geri çekme çağrısı YALNIZCA araya hiçbir bekleme girmeden yapılan taze bir
+        PENDING sorgusunun hemen ardından gönderilir. Geri çekme ağ hatası verirse körlemesine
+        tekrarlanmaz; beklenir ve sorgu + geri çekme çifti baştan yapılır.
+        """
+        backoff = config.NETWORK_BACKOFF
+        for attempt in range(len(backoff) + 1):
+            self._respect_hourly_cap()
+            found = self._lookup(u)
+            if found is None:
+                return Outcome.FAILED, False
+            status, uid = found
+            if status is not Status.PENDING:
+                if attempt > 0 and status is Status.NONE:
+                    # Önceki geri çekme isteği ağ hatasına rağmen Instagram'a ulaşmış.
+                    self.p.cancel_times.append(self.now())
+                    self._record(u, Outcome.CANCELLED)
+                    return Outcome.CANCELLED, True
+                self._record(u, _NON_PENDING[status])
+                return _NON_PENDING[status], attempt > 0
+            try:
+                self.client.cancel(uid)
+                break
+            except ApiError:
+                self._record(u, Outcome.FAILED)
+                return Outcome.FAILED, True
+            except NetworkError:
+                if attempt == len(backoff):
+                    raise
+                self.emit(self._event("waiting", seconds=backoff[attempt]))
+                self._wait(backoff[attempt])
+        # Buradan sonra yeniden kontrol bitene kadar durdurma isteğine bakılmaz.
         self.p.cancel_times.append(self.now())
         self.store.save(self.p)
         try:
-            after, _ = self._retry(lambda: self.client.lookup(u))
-        except ApiError:
-            after = Status.PENDING
-        outcome = Outcome.FAILED if after in (Status.PENDING, Status.FOLLOWING) else Outcome.CANCELLED
+            found = self._lookup(u)
+        except UnexpectedResponse:
+            found = None
+        after = found[0] if found else None
+        outcome = Outcome.CANCELLED if after is Status.NONE else Outcome.FAILED
         self._record(u, outcome)
         return outcome, True
 

@@ -167,7 +167,9 @@ def test_network_retries_then_stops(tmp_path):
     r, c, _, prog, events, clock, _ = make(tmp_path, {"a": [P]},
                                            lookup_errors={"a": [NetworkError()] * 4})
     r.run()
-    assert clock.sleeps[:3] == list(config.NETWORK_BACKOFF)
+    waits = [e.seconds for e in events if e.kind == "waiting"]
+    assert waits == list(config.NETWORK_BACKOFF)
+    assert sum(clock.sleeps) == sum(config.NETWORK_BACKOFF)
     assert (events[-1].kind, events[-1].reason) == ("stopped", "network")
     assert prog.results == {}
 
@@ -195,3 +197,101 @@ def test_stop_event_never_between_cancel_and_recheck(tmp_path):
     assert prog.results == {"a": Outcome.CANCELLED}
     assert c.cancels == ["a"]
     assert (events[-1].kind, events[-1].reason) == ("stopped", "user")
+
+
+# ---- final review fixes ----------------------------------------------------
+from istek_geri_cek.instagram_api import UnexpectedResponse
+
+
+class TimedClient(FakeClient):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.lookup_at = []
+
+    def lookup(self, u):
+        self.lookup_at.append((u, self.clock.t))
+        return super().lookup(u)
+
+
+def test_every_cancel_immediately_follows_a_fresh_lookup(tmp_path):
+    """C1: the hourly-cap wait must not sit between the PENDING lookup and the cancel."""
+    clock = Clock()
+    users = {f"u{i}": [P, N] for i in range(62)}
+    client = TimedClient(users, clock)
+    prog = Progress(account="efe", usernames=list(users))
+    events = []
+    Runner(client, Store(tmp_path), prog, emit=events.append, sleep=clock.sleep, now=clock.now,
+           rand=lambda a, b: a, stop=threading.Event()).run()
+    assert any(e.kind == "waiting" for e in events)
+    for u, t in zip(client.cancels, client.cancel_at):
+        last = [lt for lu, lt in client.lookup_at if lu == u and lt <= t][-1]
+        assert last == t, (u, last, t)
+
+
+def test_cancel_network_error_is_not_blindly_retried(tmp_path):
+    """C2: after a failed cancel POST, re-lookup first; an accepted follow must not be cancelled."""
+    r, c, _, prog, *_ = make(tmp_path, {"a": [P, F]}, cancel_errors={"a": [NetworkError()]})
+    r.run()
+    assert c.cancels == []
+    assert prog.results["a"] is Outcome.ACCEPTED
+
+
+def test_cancel_network_error_retries_with_fresh_lookup(tmp_path):
+    r, c, _, prog, *_ = make(tmp_path, {"a": [P, P, N]}, cancel_errors={"a": [NetworkError()]})
+    r.run()
+    assert c.cancels == ["a"]
+    assert prog.results["a"] is Outcome.CANCELLED
+
+
+def test_unexpected_response_stops_and_records_nothing(tmp_path):
+    """C3"""
+    r, c, _, prog, events, *_ = make(tmp_path, {"a": [P]}, lookup_errors={"a": [UnexpectedResponse("x")]})
+    r.check()
+    assert prog.results == {} and prog.checked == {}
+    assert (events[-1].kind, events[-1].reason) == ("stopped", "unexpected")
+
+
+def test_post_cancel_not_found_is_failed(tmp_path):
+    """C3: only an exact NONE after cancel counts as CANCELLED (trial must not pass on garbage)."""
+    r, c, _, prog, events, *_ = make(tmp_path, {"a": [P, X]})
+    r.run()
+    assert prog.results["a"] is Outcome.FAILED
+    assert (events[-1].kind, events[-1].reason) == ("stopped", "trial_failed")
+
+
+def test_three_consecutive_api_errors_stop_without_final_results(tmp_path):
+    """I2: a systemic 4xx must not mark everyone FAILED and end with 'nothing to do'."""
+    errs = {u: [ApiError("400")] for u in "abc"}
+    r, c, _, prog, events, *_ = make(tmp_path, {"a": [P], "b": [P], "c": [P], "d": [P]}, lookup_errors=errs)
+    assert r.check() is None
+    assert prog.results == {}
+    assert (events[-1].kind, events[-1].reason) == ("stopped", "unexpected")
+
+
+def test_summary_counts_failed(tmp_path):
+    r, c, _, prog, *_ = make(tmp_path, {"a": [P], "b": [P]}, lookup_errors={"a": [ApiError("400")]})
+    s = r.check()
+    assert s.failed == 1 and s.pending == 1
+
+
+def test_network_backoff_is_stoppable_and_visible(tmp_path):
+    """I8"""
+    holder = {}
+    r, c, _, prog, events, clock, stop = make(tmp_path, {"a": [P]},
+                                              lookup_errors={"a": [NetworkError()] * 4})
+    def sleep(s):
+        clock.sleep(s)
+        if clock.t - 1_000_000.0 >= 5:
+            stop.set()
+    r._sleep = sleep
+    r.run()
+    assert any(e.kind == "waiting" for e in events)
+    assert (events[-1].kind, events[-1].reason) == ("stopped", "user")
+    assert sum(clock.sleeps) < 10
+
+
+def test_cancel_network_error_but_post_landed_counts_as_cancelled(tmp_path):
+    r, c, _, prog, *_ = make(tmp_path, {"a": [P, N]}, cancel_errors={"a": [NetworkError()]})
+    r.run()
+    assert prog.results["a"] is Outcome.CANCELLED
+    assert prog.trial_done
