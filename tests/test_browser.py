@@ -119,3 +119,22 @@ def test_wait_for_login_does_not_yank_user_mid_login():
             return "efe" if C.n == 3 else None
     name, _ = _wait(page, C())
     assert name == "efe" and page.gotos == []
+
+
+def test_save_download_goes_to_downloads(tmp_path):
+    saved = []
+
+    class D:
+        suggested_filename = "instagram-efe-2026-11-15.zip"
+
+        def save_as(self, path):
+            saved.append(path)
+
+    browser.save_download(D(), tmp_path)
+    assert saved == [tmp_path / "instagram-efe-2026-11-15.zip"]
+
+
+def test_wait_for_login_gives_up_after_repeated_unexpected():
+    from istek_geri_cek.instagram_api import UnexpectedResponse
+    with pytest.raises(UnexpectedResponse):
+        _wait(Page(), Client([UnexpectedResponse("x")] * 10))

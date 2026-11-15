@@ -48,8 +48,18 @@ def open_instagram(pw):
     return ctx, page
 
 
-def wait_for_login(page, client, stop: threading.Event, poll: float = 2.0) -> str | None:
+def save_download(download, folder) -> None:
+    """Edge penceresinde indirilen dosyayı (ör. Instagram ZIP'i) İndirilenler'e kaydeder."""
+    from pathlib import Path
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    download.save_as(folder / download.suggested_filename)
+
+
+def wait_for_login(page, client, stop: threading.Event, poll: float = 2.0, max_unexpected: int = 5) -> str | None:
+    from .instagram_api import UnexpectedResponse
     delay = poll
+    unexpected = 0
     # Yalnızca başta Instagram'a dön (ör. rehberdeki sayfadan). Sonrasında kullanıcının
     # giriş akışına (Facebook ile giriş, doğrulama sayfaları) karışma.
     if not page.is_closed() and not page.url.startswith(INSTAGRAM):
@@ -60,6 +70,12 @@ def wait_for_login(page, client, stop: threading.Event, poll: float = 2.0) -> st
         try:
             name = client.current_username()
             delay = poll
+        except UnexpectedResponse:
+            unexpected += 1
+            log.warning("giriş var ama kullanıcı adı okunamadı (%d)", unexpected)
+            if unexpected >= max_unexpected:
+                raise
+            name = None
         except Exception as e:
             if page.is_closed():
                 raise BrowserClosed() from e

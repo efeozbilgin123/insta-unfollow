@@ -16,7 +16,8 @@ from pathlib import Path
 from tkinter import filedialog, font, messagebox, ttk
 
 from . import __version__, config, strings
-from .browser import INSTAGRAM, BrowserClosed, EdgeMissing, open_instagram, single_instance_lock, wait_for_login
+from .browser import (INSTAGRAM, BrowserClosed, EdgeMissing, open_instagram, save_download,
+                      single_instance_lock, wait_for_login)
 from .instagram_api import InstagramClient
 from .report import build_report, save_report
 from .runner import Runner
@@ -42,7 +43,11 @@ class Worker(threading.Thread):
             from playwright.sync_api import sync_playwright
             self.pw = sync_playwright().start()
         while True:
-            fn = self.cmd_q.get()
+            try:
+                fn = self.cmd_q.get(timeout=0.5)
+            except queue.Empty:
+                self._pump()
+                continue
             if fn is None:
                 break
             try:
@@ -64,6 +69,22 @@ class Worker(threading.Thread):
         except Exception:
             pass
 
+    def _pump(self):
+        """Boştayken Playwright olaylarını (ör. indirmeler) işlet."""
+        if self.page is not None:
+            try:
+                if not self.page.is_closed():
+                    self.page.wait_for_timeout(50)
+            except Exception:
+                pass
+
+    def _on_download(self, download):
+        try:
+            save_download(download, Path.home() / "Downloads")
+            log.info("indirme kaydedildi: %s", download.suggested_filename)
+        except Exception:
+            log.exception("indirme kaydedilemedi")
+
     def ensure_browser(self, url: str | None = None):
         if self.fake:
             from .fake import FakeClient
@@ -74,6 +95,9 @@ class Worker(threading.Thread):
         if self.ctx is None:
             self.ctx, self.page = open_instagram(self.pw)
             self.client = InstagramClient(self.page)
+            for pg in self.ctx.pages:
+                pg.on("download", self._on_download)
+            self.ctx.on("page", lambda pg: pg.on("download", self._on_download))
             if not url:
                 self.page.goto(INSTAGRAM)
         if url:
@@ -284,7 +308,7 @@ class App:
                 bar.configure(maximum=max(1, e.total), value=e.done)
                 line.configure(text=strings.CHECKING.format(done=e.done, total=e.total))
             elif e.kind == "stopped":
-                self.stopped(e.reason)
+                self.stopped(e.reason, e.detail)
 
         def job(w: Worker):
             summary = self._runner(w).check()
@@ -342,14 +366,16 @@ class App:
             elif e.kind == "done":
                 self.done()
             elif e.kind == "stopped":
-                self.stopped(e.reason)
+                self.stopped(e.reason, e.detail)
 
         self.handlers["runner"] = on_runner
         self._submit(lambda w: self._runner(w).run())
 
     # ---- durma / hata ------------------------------------------------------
-    def stopped(self, reason: str):
-        log.info("durdu: %s", reason)
+    def stopped(self, reason: str, detail: str | None = None):
+        log.info("durdu: %s %s", reason, detail or "")
+        if detail:
+            self.last_error = detail
         if reason == "login":
             self.progress = self.store.load(self.progress.account) or self.progress
             self.usernames = self.progress.usernames

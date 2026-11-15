@@ -10,6 +10,9 @@ class FakeClient:
     def current_username(self):
         return "deneme_hesabi"
 
+    def self_check(self, username):
+        return "1"
+
     def lookup(self, u):
         s = self.state.get(u, Status.PENDING)
         return s, (None if s is Status.NOT_FOUND else u)

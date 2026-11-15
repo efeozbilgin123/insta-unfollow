@@ -6,17 +6,23 @@ from istek_geri_cek.instagram_api import (
 )
 
 
+class Ctx:
+    def __init__(self, cookies):
+        self._c = cookies
+
+    def cookies(self):
+        return [{"name": k, "value": v} for k, v in self._c.items()]
+
+
 class FakePage:
     """Scripted stand-in for a Playwright Page: routes by URL substring."""
 
     def __init__(self, routes=None, cookies=None):
         self.routes = routes or {}
-        self.cookies = cookies or {}
+        self.context = Ctx(cookies or {})
         self.calls = []
 
     def evaluate(self, js, arg):
-        if isinstance(arg, str):  # cookie read
-            return self.cookies.get(arg)
         self.calls.append(arg)
         for key, resp in self.routes.items():
             if key in arg["url"]:
@@ -111,3 +117,34 @@ def test_following_wins_over_outgoing_request():
 
 def test_friendship_none_requires_both_false():
     assert status_from_friendship({"outgoing_request": False, "following": False}) is Status.NONE
+
+
+# ---- advisor pass ------------------------------------------------------------
+class Ctx:
+    def __init__(self, cookies):
+        self._c = cookies
+
+    def cookies(self):
+        return [{"name": k, "value": v} for k, v in self._c.items()]
+
+
+def test_friendship_404_after_profile_is_unexpected():
+    page = FakePage({"web_profile_info": {"status": 200, "body": {"data": {"user": {"id": "42"}}}}})
+    with pytest.raises(UnexpectedResponse):
+        InstagramClient(page).lookup("ali")
+
+
+def test_self_check_returns_id():
+    page = FakePage({"web_profile_info": {"status": 200, "body": {"data": {"user": {"id": "7"}}}}})
+    assert InstagramClient(page).self_check("efe") == "7"
+
+
+def test_self_check_404_is_unexpected():
+    with pytest.raises(UnexpectedResponse):
+        InstagramClient(FakePage()).self_check("efe")
+
+
+def test_current_username_cookie_but_no_name_is_unexpected():
+    page = FakePage({"users/7/info": {"status": 404, "body": None}}, cookies={"ds_user_id": "7"})
+    with pytest.raises(UnexpectedResponse):
+        InstagramClient(page).current_username()

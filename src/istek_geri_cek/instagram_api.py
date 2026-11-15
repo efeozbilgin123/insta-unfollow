@@ -5,8 +5,11 @@ hesapla ilk denemede doğrulanacak. Bir şey değişirse yalnızca bu dosya düz
 """
 from __future__ import annotations
 
+import logging
 from enum import Enum
 from urllib.parse import quote
+
+log = logging.getLogger("istek_geri_cek")
 
 BASE = "https://www.instagram.com"
 APP_ID = "936619743392459"
@@ -38,9 +41,6 @@ async (a) => {
 }
 """
 
-_COOKIE_JS = """
-(name) => (document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]*)")) || [])[1] || null
-"""
 
 
 class Status(Enum):
@@ -98,16 +98,30 @@ class InstagramClient:
     def _call(self, url: str, method: str = "GET", body: str | None = None) -> tuple[int, dict | None]:
         r = self.page.evaluate(_REQUEST_JS, {"url": url, "method": method, "body": body, "app_id": APP_ID})
         status, data = int(r.get("status", 0)), r.get("body")
+        if not 200 <= status < 300:
+            # yalnızca yanıt gövdesi kaydedilir; header/çerez asla
+            log.warning("instagram %s %s -> %s %s", method, url.split("?")[0], status, repr(data)[:300])
         classify_response(status, data)
         return status, data
 
     def current_username(self) -> str | None:
-        uid = self.page.evaluate(_COOKIE_JS, "ds_user_id")
+        cookies = {c.get("name"): c.get("value") for c in self.page.context.cookies()}
+        uid = cookies.get("ds_user_id")
         if not uid:
             return None
         status, data = self._call(USER_INFO_URL.format(user_id=uid))
-        name = ((data or {}).get("user") or {}).get("username")
-        return name.lower() if status == 200 and name else None
+        name = (((data if isinstance(data, dict) else {}).get("user")) or {}).get("username")
+        if status != 200 or not isinstance(name, str) or not name:
+            raise UnexpectedResponse(f"user info {status}: {data!r}"[:300])
+        return name.lower()
+
+    def self_check(self, username: str) -> str:
+        """Kendi profilini okuyabildiğimizi doğrular (profil endpoint'i için kanarya)."""
+        status, data = self._call(PROFILE_URL.format(username=quote(username)))
+        user = ((data if isinstance(data, dict) else {}).get("data") or {}).get("user")
+        if status != 200 or not isinstance(user, dict) or not user.get("id"):
+            raise UnexpectedResponse(f"self profile {status}: {data!r}"[:300])
+        return str(user["id"])
 
     def lookup(self, username: str) -> tuple[Status, str | None]:
         status, data = self._call(PROFILE_URL.format(username=quote(username)))
@@ -119,7 +133,7 @@ class InstagramClient:
         uid = str(user["id"])
         status, fs = self._call(FRIENDSHIP_URL.format(user_id=uid))
         if status == 404:
-            return Status.NOT_FOUND, None
+            raise UnexpectedResponse(f"friendship 404 for existing user {uid}")
         return status_from_friendship(fs if isinstance(fs, dict) else {}), uid
 
     def cancel(self, user_id: str) -> None:

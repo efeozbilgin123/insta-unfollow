@@ -43,6 +43,9 @@ class FakeClient:
         s = seq.pop(0) if len(seq) > 1 else seq[0]
         return s, (None if s is X else "id_" + u)
 
+    def self_check(self, username):
+        return "id_self"
+
     def cancel(self, uid):
         u = uid[3:]
         errs = self.cancel_errors.get(u)
@@ -295,3 +298,28 @@ def test_cancel_network_error_but_post_landed_counts_as_cancelled(tmp_path):
     r.run()
     assert prog.results["a"] is Outcome.CANCELLED
     assert prog.trial_done
+
+
+# ---- advisor pass ------------------------------------------------------------
+def test_trial_needs_verified_cancel(tmp_path):
+    r, c, _, prog, events, *_ = make(tmp_path, {"a": [P, F], "b": [P, N]}, cancel_errors={"a": [NetworkError()]})
+    r.run()
+    assert prog.results["a"] is Outcome.ACCEPTED
+    trial = [e for e in events if e.kind == "trial_ok"]
+    assert trial and trial[0].username == "b"
+
+
+def test_stop_event_carries_error_detail(tmp_path):
+    r, c, _, prog, events, *_ = make(tmp_path, {"a": [P]}, lookup_errors={"a": [UnexpectedResponse("marker-123")]})
+    r.check()
+    assert "marker-123" in (events[-1].detail or "")
+
+
+def test_check_canary_stops_when_own_profile_unreadable(tmp_path):
+    r, c, _, prog, events, *_ = make(tmp_path, {"a": [P]})
+    def broken(name):
+        raise UnexpectedResponse("own profile")
+    c.self_check = broken
+    assert r.check() is None
+    assert c.lookups == []
+    assert (events[-1].kind, events[-1].reason) == ("stopped", "unexpected")

@@ -1,6 +1,7 @@
 """Kontrol → tek deneme → hepsi akışı. Instagram'a güvenli ve yavaş davranır."""
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass
 from typing import Callable
@@ -8,6 +9,8 @@ from typing import Callable
 from . import config
 from .instagram_api import ApiError, LoginRequired, NetworkError, RateLimited, Status, UnexpectedResponse
 from .store import Outcome, Progress, Store
+
+log = logging.getLogger("istek_geri_cek")
 
 _NON_PENDING = {
     Status.FOLLOWING: Outcome.ACCEPTED,
@@ -24,6 +27,7 @@ class Event:
     username: str | None = None
     seconds: float | None = None
     reason: str | None = None  # rate_limited | login | network | user | trial_failed | unexpected
+    detail: str | None = None  # durma sebebinin teknik ayrıntısı (rapora girer)
 
 
 @dataclass
@@ -96,23 +100,26 @@ class Runner:
         try:
             body()
             return True
-        except RateLimited:
-            reason = "rate_limited"
-        except LoginRequired:
-            reason = "login"
-        except NetworkError:
-            reason = "network"
-        except UnexpectedResponse:
-            reason = "unexpected"
+        except RateLimited as e:
+            reason, err = "rate_limited", e
+        except LoginRequired as e:
+            reason, err = "login", e
+        except NetworkError as e:
+            reason, err = "network", e
+        except UnexpectedResponse as e:
+            reason, err = "unexpected", e
         except _Stop as s:
-            reason = s.reason
+            reason, err = s.reason, None
+        detail = f"{type(err).__name__}: {err}" if err is not None else None
+        log.warning("durdu: %s %s", reason, detail or "")
         self.store.save(self.p)
-        self.emit(self._event("stopped", reason=reason))
+        self.emit(self._event("stopped", reason=reason, detail=detail))
         return False
 
     # ---- kontrol (hiçbir şeyi değiştirmez) ---------------------------------
     def check(self) -> CheckSummary | None:
         def body():
+            self.client.self_check(self.p.account)  # kanarya: profil endpoint'i çalışıyor mu?
             todo = [u for u in self.store.pending_work(self.p) if u not in self.p.checked]
             for i, u in enumerate(todo):
                 if self.stop.is_set():
@@ -204,9 +211,10 @@ class Runner:
                     raise _Stop("user")
                 self.emit(self._event("progress", username=u))
                 outcome, cancelled = self._process(u)
-                if cancelled and not self.p.trial_done:
-                    if outcome is Outcome.FAILED:
-                        raise _Stop("trial_failed")
+                if not self.p.trial_done and cancelled and outcome is Outcome.FAILED:
+                    raise _Stop("trial_failed")
+                if not self.p.trial_done and outcome is Outcome.CANCELLED:
+                    # deneme ancak doğrulanmış bir geri çekmeyle geçer
                     self.p.trial_done = True
                     self.store.save(self.p)
                     self.emit(self._event("trial_ok", username=u))
