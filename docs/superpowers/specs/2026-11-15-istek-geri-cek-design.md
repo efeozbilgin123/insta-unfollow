@@ -72,8 +72,10 @@ Kullanıcı 1'i seçti. Arkadaşın bilgisayarı Windows.
 4. **Giriş.** Edge penceresi Instagram'ı açar. Program penceresinde
    "Açılan pencerede Instagram'a giriş yap, sonra buraya dön" yazar. Giriş algılanınca kendiliğinden ilerler.
    Profil kalıcı olduğundan sonraki açılışlarda tekrar giriş gerekmez.
-   ZIP'teki hesap ile giriş yapılan hesap farklıysa uyarır.
-5. **Onay.** "128 kişiye bekleyen istek bulundu. Geri çekilsin mi? Bu işlem yaklaşık 3 saat sürebilir,
+   *(Benim kararım)* ZIP'in hangi hesaba ait olduğu güvenilir şekilde anlaşılamıyor
+   (yalnızca "Takipçiler ve takip edilenler" seçilince profil bilgisi gelmiyor). Bu yüzden otomatik eşleştirme yok.
+   Onay ekranında giriş yapılan hesap büyük harfle gösterilir ve kullanıcıya sorulur (bkz. 5).
+5. **Onay.** "Giriş yapılan hesap: **@kullaniciadi**. Bu senin hesabın mı?" sorusu, ardından "128 kişiye bekleyen istek bulundu. Geri çekilsin mi? Bu işlem yaklaşık 3 saat sürebilir,
    bilgisayar açık kalmalı." Butonlar: "Evet, başlat" / "Hayır".
 6. **İlerleme.** Büyük ilerleme çubuğu ("37 / 128"), o anda işlenen kullanıcı adı, tahmini kalan süre
    ve "Durdur" butonu. Kapatılırsa kaldığı yer kaydedilir.
@@ -102,6 +104,12 @@ ZIP bir anlık görüntü. Bazı istekler o arada kabul edilmiş olabilir. Her k
 
 Bu kontrol aynı zamanda gerçek hesap olmadan doğrulamanın yolu: program her işlemin gerçekten tuttuğunu kendisi görür.
 
+*(Benim kararım)* Instagram'da istek geri çekme büyük olasılıkla takipten çıkmayla aynı çağrı. Kontrol ile çağrı arasında
+istek kabul edilirse (saniyeler içinde, çok düşük olasılık) kişi takipten çıkmış olur. Bu pencere, kontrol çağrıdan
+hemen önce yapılarak en aza indirilir. Sonraki kontrol "takip ediliyordu" durumunu görürse otomatik yeniden takip
+**yapılmaz** (gizli hesapta yeni istek gönderirdi). Bunun yerine bitiş özetinde ayrı ve açık bir satırda listelenir:
+"Bu kişiler tam o sırada isteğini kabul etmişti, tekrar takip etmek isteyebilirsin."
+
 ### Hız ve engellenme
 
 - İşlemler arasında rastgele bekleme (başlangıç değeri 40–90 sn) ve saatlik üst sınır (başlangıç değeri 60).
@@ -127,7 +135,7 @@ Bu kontrol aynı zamanda gerçek hesap olmadan doğrulamanın yolu: program her 
   endpoint'i, header'lar, app id ve hata kodu yorumlama. Bunlar hafızadan geliyor ve
   **ilk gerçek denemede doğrulanacak**. Düzeltme tek yerden yapılır.
 - Paketleme: GitHub Actions'ta `windows-latest` üzerinde PyInstaller ile tek dosya, `--noconsole`.
-  Çıktı Actions artifact'ı ve release olarak yayınlanır, arkadaşa tek indirme linki verilir.
+  Repo herkese açık. Çıktı GitHub Release olarak yayınlanır, arkadaşa giriş gerektirmeyen tek bir indirme linki verilir.
 - CI'da duman testi: derlenen `.exe` test modunda çalıştırılır. Edge açılır, bir sayfa yüklenir, kapanır.
   Bu, Playwright'ın gerçekten pakete girdiğini kanıtlar.
 - Testler: ZIP okuyucu için JSON ve HTML örnek verileriyle birim testleri, akış mantığı için
