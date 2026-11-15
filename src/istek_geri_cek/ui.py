@@ -13,10 +13,10 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, font, ttk
+from tkinter import filedialog, font, messagebox, ttk
 
 from . import __version__, config, strings
-from .browser import EdgeMissing, open_instagram, wait_for_login
+from .browser import INSTAGRAM, BrowserClosed, EdgeMissing, open_instagram, single_instance_lock, wait_for_login
 from .instagram_api import InstagramClient
 from .report import build_report, save_report
 from .runner import Runner
@@ -50,6 +50,9 @@ class Worker(threading.Thread):
             except EdgeMissing:
                 log.exception("Edge yok")
                 self.event_q.put(("edge_missing", None))
+            except BrowserClosed:
+                log.warning("Edge penceresi kapandı")
+                self.event_q.put(("browser_closed", None))
             except Exception as e:  # beklenmeyen: arayüze bildir, programı çökertme
                 log.exception("beklenmeyen hata")
                 self.event_q.put(("error", f"{type(e).__name__}: {e}"))
@@ -66,9 +69,13 @@ class Worker(threading.Thread):
             from .fake import FakeClient
             self.client = self.client or FakeClient()
             return
+        if self.ctx is not None and self.page.is_closed():
+            raise BrowserClosed()
         if self.ctx is None:
             self.ctx, self.page = open_instagram(self.pw)
             self.client = InstagramClient(self.page)
+            if not url:
+                self.page.goto(INSTAGRAM)
         if url:
             self.page.goto(url)
         else:
@@ -91,6 +98,8 @@ class App:
         self.usernames: list[str] = []
         self.last_error = ""
         self.handlers = {}
+        self.fresh_zip = False
+        root.report_callback_exception = self._callback_error
 
         root.title(strings.TITLE.format(version=__version__))
         root.minsize(560, 420)
@@ -109,16 +118,25 @@ class App:
     def _submit(self, fn):
         self.worker.cmd_q.put(fn)
 
+    def _callback_error(self, exc, val, tb):
+        log.error("arayüz hatası", exc_info=(exc, val, tb))
+        self.on_error(f"{exc.__name__}: {val}")
+
     def _poll(self):
         try:
             while True:
                 kind, payload = self.event_q.get_nowait()
                 handler = self.handlers.get(kind) or getattr(self, f"on_{kind}", None)
                 if handler:
-                    handler(payload)
+                    try:
+                        handler(payload)
+                    except Exception as e:
+                        log.exception("olay işlenemedi: %s", kind)
+                        self.on_error(f"{type(e).__name__}: {e}")
         except queue.Empty:
             pass
-        self.root.after(200, self._poll)
+        finally:
+            self.root.after(200, self._poll)
 
     def screen(self, title: str, body: str = "") -> ttk.Frame:
         if self.frame:
@@ -144,7 +162,14 @@ class App:
     def quit(self):
         self.stop.set()
         self.worker.cmd_q.put(None)
-        self.root.after(300, self.root.destroy)
+        deadline = time.time() + 5
+
+        def finish():
+            if self.worker.is_alive() and time.time() < deadline:
+                return self.root.after(100, finish)
+            self.root.destroy()
+
+        finish()
 
     # ---- 1. hoş geldin -----------------------------------------------------
     def welcome(self):
@@ -207,6 +232,7 @@ class App:
         log.info("ZIP okundu: %d kullanıcı adı", len(names))
         self.usernames = names
         self.progress = None
+        self.fresh_zip = True
         self.login()
 
     # ---- 4. giriş ----------------------------------------------------------
@@ -228,17 +254,13 @@ class App:
 
     def after_login(self, account: str):
         log.info("giriş: @%s", account)
-        if self.progress and self.progress.account != account:
-            # yarım iş başka hesaba ait: o hesabın kaydı yoksa yeni kayıt aç
-            self.progress = None
-        if self.progress is None:
-            existing = self.store.load(account)
-            if existing:
-                existing.usernames += [u for u in self.usernames if u not in existing.usernames]
-                self.progress = existing
-            else:
-                self.progress = Progress(account=account, usernames=list(self.usernames))
-            self.store.save(self.progress)
+        if self.fresh_zip:
+            self.progress = self.store.start(account, self.usernames)
+            self.fresh_zip = False
+        elif self.progress is None or self.progress.account != account:
+            # yarım iş başka bir hesaba ait: yanlış hesaba uygulama
+            self.screen(strings.WELCOME_TITLE, strings.WRONG_ACCOUNT)
+            return self.button(strings.BTN_CLOSE, self.quit)
         self.check()
 
     # ---- 5. kontrol + onay -------------------------------------------------
@@ -277,11 +299,14 @@ class App:
         self.screen(strings.WELCOME_TITLE)
         self.label(strings.CONFIRM_ACCOUNT.format(account=self.progress.account), font=self.big)
         if s.pending == 0:
-            self.label(strings.CONFIRM_NONE)
+            if not s.failed:
+                self.label(strings.CONFIRM_NONE)
             return self.done(keep_screen=True)
         self.label(strings.CONFIRM_COUNTS.format(
             pending=s.pending, accepted=s.accepted, not_found=s.not_found,
             hours=strings.duration(s.pending * AVG_CANCEL_SECONDS)))
+        if s.failed:
+            self.label(strings.CONFIRM_FAILED.format(failed=s.failed))
         self.button(strings.BTN_START, self.run)
         self.button(strings.BTN_NO, lambda: (self.screen(strings.WELCOME_TITLE, strings.WRONG_ACCOUNT),
                                              self.button(strings.BTN_CLOSE, self.quit)))
@@ -332,7 +357,8 @@ class App:
             return self._relogin()
         self.screen(strings.PROGRESS_TITLE, strings.STOP_MESSAGES[reason])
         if reason == "network":
-            self.button(strings.BTN_RETRY, self.run)
+            # tekrar dene her zaman kontrol + onay ekranından geçer
+            self.button(strings.BTN_RETRY, self.check)
         self._report_button()
         self.button(strings.BTN_CLOSE, self.quit)
 
@@ -347,7 +373,7 @@ class App:
             if name != self.progress.account:
                 self.screen(strings.WELCOME_TITLE, strings.WRONG_ACCOUNT)
                 return self.button(strings.BTN_CLOSE, self.quit)
-            self.run()
+            self.check()
 
         self.handlers["relogged"] = relogged
         self._submit(job)
@@ -356,6 +382,10 @@ class App:
         self.last_error = detail
         self.screen(strings.PROGRESS_TITLE, strings.UNEXPECTED)
         self._report_button()
+        self.button(strings.BTN_CLOSE, self.quit)
+
+    def on_browser_closed(self, _):
+        self.screen(strings.WELCOME_TITLE, strings.BROWSER_CLOSED)
         self.button(strings.BTN_CLOSE, self.quit)
 
     def on_edge_missing(self, _):
@@ -404,6 +434,14 @@ def run_app() -> None:
     logging.basicConfig(filename=str(config.data_dir() / "log.txt"), level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s", encoding="utf-8")
     log.info("başladı, sürüm %s", __version__)
+    lock = single_instance_lock()
+    if lock is None:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showinfo(strings.WELCOME_TITLE, strings.ALREADY_RUNNING)
+        root.destroy()
+        return
     root = tk.Tk()
     App(root)
     root.mainloop()
+    lock.close()

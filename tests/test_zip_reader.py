@@ -73,3 +73,24 @@ def test_find_export_zip_picks_newest(tmp_path):
     os.utime(other, (now, now))
     assert find_export_zip(tmp_path) == new
     assert find_export_zip(tmp_path / "missing") is None
+
+
+def test_non_string_fields_are_ignored(make_zip):
+    z = make_zip({P + "pending_follow_requests.json": json.dumps({"relationships_follow_requests_sent": [
+        {"title": 5, "string_list_data": [{"value": None, "href": "https://www.instagram.com/ok_user"}]},
+        {"title": ["x"], "string_list_data": [{"value": 12}]}]})})
+    assert read_usernames(z) == ["ok_user"]
+
+
+def test_unreadable_member_is_not_zip(tmp_path):
+    import zipfile
+    p = tmp_path / "instagram-bad.zip"
+    with zipfile.ZipFile(p, "w", zipfile.ZIP_STORED) as z:
+        z.writestr(P + "pending_follow_requests.json", '{"a": "' + "x" * 200 + '"}')
+    raw = bytearray(p.read_bytes())
+    i = raw.index(b"xxxx")
+    raw[i:i + 4] = b"yyyy"  # bozuk CRC
+    p.write_bytes(bytes(raw))
+    with pytest.raises(ExportError) as e:
+        read_usernames(p)
+    assert e.value.kind == "not_zip"

@@ -51,6 +51,7 @@ CONFIRM_COUNTS = ("{pending} kişiye bekleyen istek bulundu.\n"
                   "{accepted} kişi isteğini zaten kabul etmiş (dokunulmayacak).\n"
                   "{not_found} hesap artık yok.\n\n"
                   "Bu işlem yaklaşık {hours} sürebilir. Bilgisayar açık ve internete bağlı kalmalı.")
+CONFIRM_FAILED = "{failed} kişi kontrol edilemedi (bunlara dokunulmayacak)."
 CONFIRM_NONE = "Bekleyen isteğin yok. Yapılacak bir şey kalmadı. 🎉"
 BTN_START = "Evet, başlat"
 BTN_NO = "Hayır"
@@ -81,9 +82,13 @@ STOP_MESSAGES = {
     "login": "Instagram oturumun kapandı. Edge penceresinde tekrar giriş yap, program kendiliğinden devam eder.",
     "network": "İnternet bağlantısı koptu. Bağlantını kontrol edip \"Tekrar dene\"ye bas.",
     "user": "Durduruldu. Programı tekrar açınca kaldığı yerden devam eder.",
+    "unexpected": ("Instagram beklenmeyen bir yanıt verdi, güvenlik için durduruldu. Hiçbir şey bozulmadı.\n"
+                   "Lütfen \"Raporu kaydet\"e bas ve raporu programı sana verene gönder."),
     "trial_failed": ("İlk deneme isteği geri çekilemedi, bu yüzden hiçbir şeye devam edilmedi.\n"
                      "Lütfen \"Raporu kaydet\"e bas ve raporu programı sana verene gönder."),
 }
+BROWSER_CLOSED = "Edge penceresi kapandı. Programı kapatıp tekrar aç; kaldığı yerden devam eder."
+ALREADY_RUNNING = "Program zaten açık. Diğer pencereyi kullan (görev çubuğuna bak)."
 UNEXPECTED = ("Beklenmeyen bir sorun oldu. Programı kapatıp tekrar aç; kaldığı yerden devam eder.\n"
               "Tekrar olursa \"Raporu kaydet\"e bas ve raporu programı sana verene gönder.")
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import zipfile
+import zlib
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlparse
@@ -18,8 +19,8 @@ class ExportError(Exception):
         self.kind = kind  # "not_zip" | "no_requests"
 
 
-def _from_href(href: str | None) -> str | None:
-    if not href:
+def _from_href(href) -> str | None:
+    if not isinstance(href, str) or not href:
         return None
     u = urlparse(href)
     if u.netloc.lower() not in _HOSTS:
@@ -28,8 +29,8 @@ def _from_href(href: str | None) -> str | None:
     return parts[-1] if parts else None
 
 
-def _clean(name: str | None) -> str | None:
-    if not name:
+def _clean(name) -> str | None:
+    if not isinstance(name, str) or not name:
         return None
     name = name.strip().lstrip("@").lower()
     return name if _VALID.match(name) else None
@@ -81,7 +82,10 @@ def read_usernames(zip_path: str | Path) -> list[str]:
             base = member.rsplit("/", 1)[-1].lower()
             if "follow_requests" not in base:
                 continue
-            raw = zf.read(member).decode("utf-8", errors="replace")
+            try:
+                raw = zf.read(member).decode("utf-8", errors="replace")
+            except (zipfile.BadZipFile, RuntimeError, NotImplementedError, zlib.error, OSError) as e:
+                raise ExportError("not_zip") from e
             if base.endswith(".json"):
                 matched = True
                 try:

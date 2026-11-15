@@ -44,3 +44,29 @@ def test_corrupt_file_loads_none(tmp_path):
 def test_atomic_write_leaves_no_tmp(tmp_path):
     Store(tmp_path).save(_p())
     assert [f.name for f in tmp_path.iterdir()] == ["progress_efe.json"]
+
+
+def test_start_new_zip_is_fresh_but_keeps_cancel_times(tmp_path):
+    """I9: an explicit new ZIP must not inherit old final results."""
+    s = Store(tmp_path)
+    old = _p("efe", ["a", "b"])
+    old.results["a"] = Outcome.CANCELLED
+    old.cancel_times = [5.0]
+    old.trial_done = True
+    s.save(old)
+    p = s.start("efe", ["a", "c"])
+    assert p.usernames == ["a", "c"] and p.results == {} and p.checked == {}
+    assert p.cancel_times == [5.0] and p.trial_done is False
+    assert s.load("efe") == p
+
+
+def test_start_without_existing(tmp_path):
+    p = Store(tmp_path).start("yeni", ["x"])
+    assert p == Progress(account="yeni", usernames=["x"])
+
+
+def test_load_ignores_unknown_keys(tmp_path):
+    import json
+    (tmp_path / "progress_efe.json").write_text(json.dumps(
+        {"account": "efe", "usernames": ["a"], "future_field": 1}))
+    assert Store(tmp_path).load("efe").usernames == ["a"]

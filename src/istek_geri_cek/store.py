@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 from pathlib import Path
 
@@ -39,7 +39,8 @@ class Store:
         try:
             d = json.loads(path.read_text(encoding="utf-8"))
             d["results"] = {k: Outcome(v) for k, v in d.get("results", {}).items()}
-            return Progress(**d)
+            known = {f.name for f in fields(Progress)}
+            return Progress(**{k: v for k, v in d.items() if k in known})
         except (OSError, ValueError, TypeError, KeyError):
             return None
 
@@ -53,6 +54,14 @@ class Store:
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, path)
+
+    def start(self, account: str, usernames: list[str]) -> Progress:
+        """Yeni bir ZIP için temiz kayıt. Saatlik sınır için eski geri çekme zamanları korunur."""
+        old = self.load(account)
+        p = Progress(account=account, usernames=list(usernames),
+                     cancel_times=list(old.cancel_times) if old else [])
+        self.save(p)
+        return p
 
     def pending_work(self, p: Progress) -> list[str]:
         return [u for u in p.usernames if u not in p.results]
